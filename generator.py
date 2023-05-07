@@ -8,7 +8,7 @@ class workload_generator(ABC):
     """
 
     @abstractmethod
-    def generate(self, size=1):
+    def generate(self):
         pass
 
 
@@ -36,8 +36,8 @@ class zipfian_generator(workload_generator):
         self.keys, self.probs = self.compute_keys_and_probs(lo, hi, a, reverse)
     
 
-    def generate(self, size=1):
+    def generate(self):
         """
         Sample with replacement with initialized prob distribution
         """
-        return np.random.choice(self.keys, size=size, replace=True, p=self.probs)
+        return np.random.choice(self.keys, replace=True, p=self.probs)

@@ -104,10 +104,43 @@ class simple_rw_peer(peer):
         if len(self.tnx_history) > 0 and self.tnx_history[-1].tnx_type == 'read':
             new_tnx = transaction(self.name, 'write', self.tnx_history[-1].key)
         else:
-            new_tnx = transaction(self.name, 'read', self.workload_generator.generate(1)[0])
+            new_tnx = transaction(self.name, 'read', self.workload_generator.generate())
         self.waiting = True
         self.tnx_history.append(new_tnx)
         return new_tnx
+
+
+class write_peer(peer):
+    """
+    Peer that only submits write requests following a given distribution
+    """
+
+    def __init__(self, name: str, write_keygen: workload_generator):
+        self.name = name
+        self.write_keygen = write_keygen
+        self.last_failed = False
+        self.waiting = False
+        self.last_submitted_txn = None
+    
+
+    def check_if_next_transaction(self):
+        return True
+    
+
+    def update_peer_state(self, server_response):
+        self.last_failed = server_response
+
+    
+    def next_tnx(self):
+        """
+        Resubmit if previous tnx failed
+        """
+        if self.last_failed:
+            return self.last_submitted_txn
+        else:
+            key = self.write_keygen.generate()
+            self.last_submitted_txn = transaction(self.name, 'write', key)
+            return self.last_submitted_txn
 
 
 class rw_peer(peer):
@@ -121,13 +154,12 @@ class rw_peer(peer):
         self.read_prob = read_prob
         self.read_keygen = read_keygen
         self.write_keygen = write_keygen
-        self.waiting = True
         self.last_failed = False
         self.last_submitted_txn = None
 
 
     def check_if_next_transaction(self):
-        return not self.waiting
+        return True
     
 
     def update_peer_state(self, server_response):
