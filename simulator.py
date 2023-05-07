@@ -26,14 +26,14 @@ class block_server:
             return None, None
         block_tnxs = self.pending_tnxs[0:actual_block_size]
         self.pending_tnxs = self.pending_tnxs[actual_block_size:]
-        rset, wset = set(), set()
+        rset, wset, tnx_valid = set(), set(), list()
         for tnx in block_tnxs:
             if tnx.tnx_type == 'read':
+                tnx_valid.append(tnx.key not in wset)
                 rset.add(tnx.key)
             else:
+                tnx_valid.append((tnx.key not in rset) and (tnx.key not in wset))
                 wset.add(tnx.key)
-        invalid_keys = rset.intersection(wset)
-        tnx_valid = [tnx.key not in invalid_keys for tnx in block_tnxs]
         self.processed_op_count += actual_block_size
         self.success_op_count += np.sum(tnx_valid)
         return block_tnxs, tnx_valid
@@ -63,18 +63,42 @@ class simple_rw_peer(peer):
 
     def __init__(self, name: str, generator: workload_generator):
         self.waiting = False
+        self.last_failed = False
         self.name = name
         self.workload_generator = generator
         self.tnx_history = list()
     
 
+    def check_if_next_transaction(self):
+        """
+        Return if the machine has next transaction available to submit
+        """
+        if self.last_failed:
+            return True
+        return not self.waiting
+    
+
+    def update_peer_state(self, server_response):
+        """
+        Update the fail/waiting status of the peer
+        """
+        if not server_response:
+            self.last_failed = True
+        else:
+            self.waiting = False
+            self.last_failed = False
+    
+
     def next_tnx(self):
         """
         Generate the next transaction submitted by this peer
+        - if previously submitted transaction failed, resubmit
         - if waiting for previous response, do not submit a new transaction
         - else, if previous tnx is read, submit a write request with the same key
             otherwise, submit a read request with a new key
         """
+        if self.last_failed:
+            return self.tnx_history[-1]
         if self.waiting:
             return None
         if len(self.tnx_history) > 0 and self.tnx_history[-1].tnx_type == 'read':
@@ -86,8 +110,45 @@ class simple_rw_peer(peer):
         return new_tnx
 
 
-    def flip_state(self):
+class rw_peer(peer):
+    """
+    Peer with different read/write access pattern
+    """
+
+    def __init__(self, name: str, read_prob: float,
+                 read_keygen: workload_generator, write_keygen: workload_generator):
+        self.name = name
+        self.read_prob = read_prob
+        self.read_keygen = read_keygen
+        self.write_keygen = write_keygen
+        self.waiting = True
+        self.last_failed = False
+        self.last_submitted_txn = None
+
+
+    def check_if_next_transaction(self):
+        return not self.waiting
+    
+
+    def update_peer_state(self, server_response):
+        self.last_failed = server_response
+    
+
+    def next_tnx(self):
         """
-        Change the state of current waiting status
+        Generate the next transaction
+        - if previous transaction failed, resubmit
+        - otherwise, generate a new transaction based on specified r/w ratio and distribution
         """
-        self.waiting = not self.waiting
+        if self.last_failed:
+            assert(self.last_submitted_txn is not None)
+            return self.last_submitted_txn
+        else:
+            prob = np.random.random()
+            action, generate = "write", self.write_keygen
+            if prob < self.read_prob:
+                action, generate = "read", self.read_keygen
+        
+            key = generate.generate()
+            self.last_submitted_txn = transaction(self.name, action, key)
+            return self.last_submitted_txn
